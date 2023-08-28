@@ -721,12 +721,14 @@ class Model(PreTrainedModel):
             if self.gradient_checkpointing and self.training:
 
                 def create_custom_forward(module):
+                    # 生成了当前decoder层的自定义前向计算函数,它会返回这个层的输出。
                     def custom_forward(*inputs):
                         # None for past_key_value
                         return module(*inputs, output_attentions, None)
 
                     return custom_forward
-                # TODO 这个方法可以学习一下，看看是怎么实现的，为什么要接受一个装饰器
+                # 使用了 PyTorch 的 checkpoint 功能来实现 gradient checkpointing,主要目的是减少GPU显存使用和加速训练。
+                # torch.utils.checkpoint.checkpoint允许我们对模型的中间结果进行持久化,从而减少反向传播时的显存开销。
                 layer_outputs = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(decoder_layer),
                     hidden_states,
@@ -735,7 +737,8 @@ class Model(PreTrainedModel):
                     None,
                 )
             else:
-                # TODO 直接调用decoder 层和torch.utils.checkpoint.checkpoint 有什么区别？
+                # 直接调用decoder 层和torch.utils.checkpoint.checkpoint 有什么区别？
+                # 答：节省显存
                 layer_outputs = decoder_layer(
                     hidden_states,
                     attention_mask=attention_mask,
@@ -752,7 +755,11 @@ class Model(PreTrainedModel):
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
-        # TODO 提问：为什么要对最后的隐状态做归一化，而不是每一层decoder做一次归一化？
+        #  提问：为什么要对最后的隐状态做归一化，而不是每一层decoder做一次归一化？
+        # 答：1、做局部归一化不能充分利用所有层的信息。而最后归一化可以利用每一层的输出,对全局信息进行标准化。
+            # 2、每层后归一化需要引入N个Norm模块,增加参数和计算量。最后归一化只需一个Norm,计算效率更高。
+            # 3、随着层数增多,中间层输入分布变动可能过大,归一化有助于维持稳定分布,防止 representations 退化。
+
         hidden_states = self.norm(hidden_states)
 
         # add hidden states from the last decoder layer
@@ -777,7 +784,14 @@ class BaiChuanForCausalLM(PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.model = Model(config)
-
+        # 定义一个线性层lm_head,将decoder输出投影到词表维度上,用来计算语言模型的logits。（语言模型的目标是预测下一个词,这是一个分类问题,类别数就是词表大小。）
+        # 提问：为什么设置bias=False？
+        # 避免过拟合：语言模型学习的是语言的概率分布,具有普适性。而bias参数容易导致过拟合特定样本。
+        # 模型容量：不使用bias可以减少一些参数,降低模型复杂度。
+        # 数值稳定性：bias参数的更新需要依赖于批次大小,容易造成数值不稳定。去掉bias可以降低一些训练难度。
+        # 标准化的效果：隐状态已经过 LayerNorm 处理,具有一定平滑化作用,类似bias。
+        # 加快收敛速度：有研究表明去掉bias可以加快训练的收敛速度。
+        # 简化实现：不使用bias也可以降低代码实现复杂度。
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         # Initialize weights and apply final processing
@@ -815,6 +829,17 @@ class BaiChuanForCausalLM(PreTrainedModel):
             return_dict: Optional[bool] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
+        获取输入:可以接受input_ids或者inputs_embeds作为输入,以及attention_mask,position_ids等辅助输入。
+
+        将输入传入Transformer Decoder model完成前向计算,得到隐状态outputs。
+
+        将隐状态传入线性层lm_head,得到语言模型的logits。
+
+        如果传入了labels,计算自回归语言模型的损失:
+
+        将logits和labels向右移一位(预测第i个词时label是第i+1个词)
+        用交叉熵计算损失
+        根据return_dict配置返回不同格式的输出,包括loss,logits,attentions, hidden_states等。
         Args:
             labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
                 Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
@@ -890,14 +915,30 @@ class BaiChuanForCausalLM(PreTrainedModel):
     def prepare_inputs_for_generation(
             self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
     ):
+        """为Transformer的自动回归生成准备相应的输入
+
+        Args:
+            input_ids (_type_): _description_
+            past_key_values (_type_, optional): _description_. Defaults to None.
+            attention_mask (_type_, optional): _description_. Defaults to None.
+            inputs_embeds (_type_, optional): _description_. Defaults to None.
+
+        Returns:
+            _type_: _description_
+        """
         if past_key_values:
+            # past_key_values表示使用缓存,即只需要为当前timestep准备输入。
+            # 所以将input_ids切片取最后一个token,变为添加一个新token的生成。
             input_ids = input_ids[:, -1:]
 
         position_ids = kwargs.get("position_ids", None)
         if attention_mask is not None and position_ids is None:
             # create position_ids on the fly for batch generation
+            # 创建位置编码position_ids:
+            # 根据attention mask的长度创建位置id。
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
+            # 如果使用缓存,取最后一个位置,表示新增生成的一个位置。
             if past_key_values:
                 position_ids = position_ids[:, -1].unsqueeze(-1)
 
