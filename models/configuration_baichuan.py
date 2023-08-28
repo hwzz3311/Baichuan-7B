@@ -60,6 +60,24 @@ class BaiChuanConfig(PretrainedConfig):
         tie_word_embeddings=False,
         **kwargs,
     ):
+        """_summary_
+
+        Args:
+            vocab_size (int, optional): _description_. Defaults to 64000.  词表大小
+            hidden_size (int, optional): _description_. Defaults to 4096. 隐藏层大小
+            intermediate_size (int, optional): _description_. Defaults to 11008. 中间层大小
+            num_hidden_layers (int, optional): _description_. Defaults to 32. 隐藏层数量
+            num_attention_heads (int, optional): _description_. Defaults to 32. 注意力头数
+            hidden_act (str, optional): _description_. Defaults to "silu". 隐藏层激活函数
+            max_position_embeddings (int, optional): _description_. Defaults to 4096. 最大位置编码
+            initializer_range (float, optional): _description_. Defaults to 0.02. 初始化范围
+            rms_norm_eps (_type_, optional): _description_. Defaults to 1e-6. rms标准化的epsilon值，"RMS" 是 "Root Mean Square" 的缩写，指的是均方根（平方根平均值）
+            use_cache (bool, optional): _description_. Defaults to True.是否使用缓存
+            pad_token_id (int, optional): _description_. Defaults to 0. pad标记
+            bos_token_id (int, optional): _description_. Defaults to 1. 开始标记
+            eos_token_id (int, optional): _description_. Defaults to 2. 结束标记
+            tie_word_embeddings (bool, optional): _description_. Defaults to False. 是否共享词嵌入
+        """
         self.vocab_size = vocab_size
         self.max_position_embeddings = max_position_embeddings
         self.hidden_size = hidden_size
